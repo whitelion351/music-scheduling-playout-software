@@ -170,6 +170,8 @@ class MainWindow(tk.Tk):
             print("added {} to queue. took {} sec(s)".format(total_added, round(time.time() - start_time, 3)))
             print("current queue_length", len(self.queue_list))
             self.queue_window.refresh()
+            if len(self.available_decks) == 2 and self.initialize is False:
+                self.load_song(self.queue_list.pop(0), self.available_decks.pop(0))
 
     @staticmethod
     def get_secs_from_sched_time(entry):
