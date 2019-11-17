@@ -1,7 +1,10 @@
 # name day in out show_top queue_options[clear, top, immediate]
 
 [entry]
-all_day;any;00:00:00;23:59:59;none;clear;top
-http://69.175.94.98:8302/stream
-http://127.0.0.1:8000/stream
+group1;any;00:00:00;23:59:59;none;clear
+file1.mp3
+file2.ogg
+folder1/
+http://music_stream:8000/live
+file3.mp3
 [end]
