@@ -12,7 +12,7 @@ from PIL import ImageTk, Image
 
 
 class MainWindow(tk.Tk):
-    def __init__(self):
+    def __init__(self, no_repeat_time=10):
         super(MainWindow, self).__init__()
         self.title("Play out GUI")
         self.update_delay = 0.1
@@ -20,7 +20,6 @@ class MainWindow(tk.Tk):
         self.canvas.pack()
         self.all_decks = []
         self.available_decks = []
-        self.valid_exts = [".mp3", ".wav", ".ogg", ".wma", ".flac"]
         self.deckA = self.PlayerDeck(self, "A")
         self.deckB = self.PlayerDeck(self, "B")
         self.deckA.deck_frame.place(x=10, y=10)
@@ -30,6 +29,9 @@ class MainWindow(tk.Tk):
         self.log_window = self.LogWindow(self)
         self.log_window.log_frame.place(x=10, y=350)
         self.queue_list = []
+        self.valid_exts = [".mp3", ".wav", ".ogg", ".wma", ".flac"]
+        self.played_dict = {}
+        self.no_repeat_time = no_repeat_time
         self.sched_name = None
         self.initialize = True
 
@@ -164,8 +166,8 @@ class MainWindow(tk.Tk):
             sleep_time = 1 + (0.2 - (process_time % 1))
             if sleep_time > 0.0:
                 time.sleep(sleep_time)
-            if int(time.time()) - int(process_time) != 1:
-                print("schedule not in time {} not 1 less than {}".format(process_time, time.time()))
+            if int(time.time()) - int(process_time) != 1 and self.initialize is False:
+                print("schedule not in time {} not 1 less than {}".format(int(process_time), int(time.time())))
 
     @staticmethod
     def get_secs_from_sched_time(entry):
@@ -187,13 +189,21 @@ class MainWindow(tk.Tk):
             print("directory {} not found".format(path))
             self.log_window.update("directory {} not found".format(path))
             return None
+        if path not in self.played_dict.keys():
+            self.played_dict[path] = {}
         choices = []
         for file in full_list:
             index = file.rfind(".")
             if file[index:] in self.valid_exts:
-                choices.append(file)
+                if file not in self.played_dict[path].keys():
+                    choices.append(file)
+                elif time.time() > self.played_dict[path][file] + (self.no_repeat_time * 60):
+                    del self.played_dict[path][file]
+                    choices.append(file)
         if len(choices) > 0:
-            return "'" + path + random.choice(choices) + "'"
+            choice = random.choice(choices)
+            self.played_dict[path][choice] = time.time()
+            return "'" + path + choice + "'"
         else:
             print("no valid files found in {}".format(path))
             self.log_window.update("no valid files found in {}".format(path))
