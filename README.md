@@ -76,3 +76,7 @@ Urls play as usual once they do not timeout while connecting. The queue will con
 ### [end] - End of this scheduled block
 
 This format can be repeated any number of times for different scheduled blocks. 
+
+# Class parameters
+
+`no_repeat_time=(num of mins)` - Number of minutes before a file selected from a folder can play again. Defaults to 10 minutes
