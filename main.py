@@ -16,7 +16,7 @@ class MainWindow(tk.Tk):
         super(MainWindow, self).__init__()
         self.title("Play out GUI")
         self.update_delay = 0.1
-        self.canvas = tk.Canvas(self, width=700, height=500, bg="#555555")
+        self.canvas = tk.Canvas(self, width=699, height=499, bg="#555555")
         self.canvas.pack()
         self.all_decks = []
         self.available_decks = []
@@ -87,91 +87,85 @@ class MainWindow(tk.Tk):
             print("deck{} is stopped".format(deck_object.deck_id))
             deck_object.status = "stopped"
 
-    def app_loop(self):
-        print("app loop started")
-        self.log_window.update("app loop started")
-        # manage queue
-        while self.deckA.running is True and self.deckB.running is True:
-
-            # read schedule and manage queue list
-            self.process_schedule()
-            if len(self.queue_list) == 0:
-                print("QUEUE LIST IS EMPTY. NO DECK MANAGEMENT POSSIBLE")
-                time.sleep(2)
-                continue
-
-            # manage decks
-            self.process_decks()
-            time.sleep(0.8)
-
     def process_schedule(self):
-        start_time = time.time()
-        total_added = 0
-        with open("schedule.txt", "r") as sched:
-            _ = sched.readlines()
-            eof = sched.tell()
-            sched.seek(0)
-            while sched.tell() != eof:
-                line = sched.readline().rstrip("\n")
-                if line.startswith("#") or line.startswith(" "):
-                    continue
-                elif line == "[entry]":
-                    details = sched.readline().rstrip("\n")
-                    details = details.split(sep=";")
-                    entry_name, entry_day, entry_in, entry_out, entry_top = details[:5]
-                    entry_options = details[5:]
-                    if entry_day == time.strftime("%a").lower() or entry_day == "any":
-                        entry_in = self.get_secs_from_sched_time(entry_in)
-                        entry_out = self.get_secs_from_sched_time(entry_out)
-                        current_secs = time.mktime(time.localtime())
-                        if entry_in <= current_secs <= entry_out:
-                            reading = True
-                            new_items = []
-                            if entry_name != self.sched_name:
-                                print("new schedule group:", details[:4])
-                                self.log_window.update("new schedule group: {}".format(details[:4]))
-                                print("using queue options = ", entry_options)
-                                self.sched_name = entry_name
-                                if "clear" in entry_options:
-                                    print("queue_list was cleared")
-                                    self.queue_list = []
-                                if entry_top != "none":
-                                    print("added show top:", entry_top)
-                                    new_items.append(entry_top)
-                                    total_added += 1
-                                if "immediate" in entry_options:
-                                    for d in self.all_decks:
-                                        if d.status == "playing" or d.status == "loading":
-                                            d.status = "ending"
-                                            # TODO: dont hardcode the 5 sec wait time below
-                                            ending_timer = Timer(5 - self.update_delay, self.deck_reset, args=[d])
-                                            ending_timer.start()
-                                            break
-                                    else:
-                                        print("could not process 'immediate' option")
-                            elif len(self.queue_list) > 1:
-                                reading = False
-                            while reading is True:
-                                line = sched.readline().rstrip("\n")
-                                if line == "[end]":
-                                    reading = False
-                                else:
-                                    if line.endswith("/") or line.endswith("\\"):
-                                        line = self.choose_from_directory(line)
-                                    if line is not None:
-                                        new_items.append(line)
+        while self.deckA.running and self.deckB.running:
+            process_time = time.time()
+            total_added = 0
+            do_immediate = False
+            with open("schedule.txt", "r") as sched:
+                _ = sched.readlines()
+                eof = sched.tell()
+                sched.seek(0)
+                while sched.tell() != eof:
+                    line = sched.readline().rstrip("\n")
+                    if line.startswith("#") or line.startswith(" "):
+                        continue
+                    elif line == "[entry]":
+                        details = sched.readline().rstrip("\n")
+                        details = details.split(sep=";")
+                        entry_name, entry_day, entry_in, entry_out, entry_top = details[:5]
+                        entry_options = details[5:]
+                        if entry_day == time.strftime("%a").lower() or entry_day == "any":
+                            entry_in = self.get_secs_from_sched_time(entry_in)
+                            entry_out = self.get_secs_from_sched_time(entry_out)
+                            current_secs = time.mktime(time.localtime())
+                            if entry_in <= current_secs <= entry_out:
+                                reading = True
+                                new_items = []
+                                if entry_name != self.sched_name:
+                                    print("new schedule group:", details[:4])
+                                    self.log_window.update("new schedule group: {}".format(details[:4]))
+                                    print("using queue options = ", entry_options)
+                                    if entry_name != "any" and entry_name != "none":
+                                        self.sched_name = entry_name
+                                    if "clear" in entry_options:
+                                        print("queue_list was cleared")
+                                        self.queue_list = []
+                                    if entry_top != "none":
+                                        print("added show top:", entry_top)
+                                        new_items.append(entry_top)
                                         total_added += 1
-        if total_added > 0:
-            if "top" in entry_options:
-                new_items.extend(self.queue_list)
-                self.queue_list = new_items
-            else:
-                self.queue_list.extend(new_items)
-            print("added {} to queue. took {} sec(s)".format(total_added, round(time.time() - start_time, 3)))
-            print("current queue_length", len(self.queue_list))
-            self.queue_window.refresh()
-            if len(self.available_decks) == 2 and self.initialize is False:
-                self.load_song(self.queue_list.pop(0), self.available_decks.pop(0))
+                                    if "immediate" in entry_options:
+                                        do_immediate = True
+                                elif len(self.queue_list) > 1:
+                                    reading = False
+                                while reading is True:
+                                    line = sched.readline().rstrip("\n")
+                                    if line == "[end]":
+                                        reading = False
+                                    else:
+                                        if line.endswith("/") or line.endswith("\\"):
+                                            line = self.choose_from_directory(line)
+                                        if line is not None:
+                                            new_items.append(line)
+                                            total_added += 1
+            if total_added > 0:
+                if "top" in entry_options:
+                    new_items.extend(self.queue_list)
+                    self.queue_list = new_items
+                else:
+                    self.queue_list.extend(new_items)
+                print("added {} to queue. queue_length = {}".format(total_added, len(self.queue_list)))
+                if do_immediate is True:
+                    for d in self.all_decks:
+                        if d.status == "playing" or d.status == "loading":
+                            print("executing immediate option")
+                            d.status = "ending"
+                            # TODO: dont hardcode the 5 sec wait time below
+                            ending_timer = Timer(5 - self.update_delay, self.deck_reset, args=[d])
+                            ending_timer.start()
+                            break
+                    else:
+                        print("could not process 'immediate' option")
+                self.queue_window.refresh()
+                if len(self.available_decks) >= 2 and len(self.queue_list) >= 1 and self.initialize is False:
+                    print("queue is loading a track")
+                    self.load_song(self.queue_list.pop(0), self.available_decks.pop(0))
+            sleep_time = 1 + (0.2 - (process_time % 1))
+            if sleep_time > 0.0:
+                time.sleep(sleep_time)
+            if int(time.time()) - int(process_time) != 1:
+                print("schedule not in time {} not 1 less than {}".format(process_time, time.time()))
 
     @staticmethod
     def get_secs_from_sched_time(entry):
@@ -206,58 +200,69 @@ class MainWindow(tk.Tk):
             return None
 
     def process_decks(self):
-        if self.initialize:
-            self.initialize = False
-            time.sleep(1)
-            self.load_song(self.queue_list.pop(0), self.available_decks.pop(0))
-            self.queue_window.refresh()
-        else:
-            for deck_object in self.all_decks:
-                file_path = deck_object.run_command("get_property", "path")
-                if deck_object.status == "paused":
-                    self.deck_reset(deck_object)
-                if deck_object.status == "playing":
-                    if deck_object in self.available_decks:
-                        self.available_decks.remove(deck_object)
-                    pos = deck_object.run_command("get_property", "time_pos")
-                    pos = float(pos) if pos is not None else None
-                    if file_path == "(null)":
-                        print("resetting deck{} - no file path".format(deck_object.deck_id))
-                        self.deck_reset(deck_object)
-                        self.load_song(self.queue_list.pop(0))
-                        continue
-                    if deck_object.song_type == "file":
-                        length = deck_object.run_command("get_property", "length")
-                        length = float(length) if length is not None else None
-                    else:
-                        length = None
-                    if pos is not None and length is not None:
-                        remaining = length - pos
-                        # TODO: dont hardcode the 5 sec wait time below
-                        if remaining < 5 and deck_object.status != "ending":
-                            print("deck{} {} => ending".format(deck_object.deck_id,  deck_object.status))
-                            deck_object.status = "ending"
-                            ending_timer = Timer(remaining - self.update_delay, self.deck_reset, args=[deck_object])
-                            ending_timer.start()
-                    if pos is None and file_path is None:
-                        deck_object.status = "stuck"
-                if deck_object.status == "ending":
-                    for d in self.all_decks:
-                        if deck_object.deck_id == d.deck_id:
-                            continue
-                        elif d.status == "playing" or d.status == "loading" \
-                                or d.status == "ending" or d.status == "paused":
-                            break
-                        else:
-                            print("deck{} ending. loading another deck".format(deck_object.deck_id))
-                            self.log_window.update("deck{} ending-queue {} decks {}".format(deck_object.deck_id,
-                                                                                            len(self.queue_list),
-                                                                                            len(self.available_decks)))
-                            self.load_song(self.queue_list.pop(0), self.available_decks.pop(0))
-                            break
-                if deck_object.status == "stuck":
-                    self.deck_reset(deck_object)
+        while self.deckA.running and self.deckB.running:
+            if self.initialize:
+                if len(self.queue_list) > 0:
                     self.load_song(self.queue_list.pop(0), self.available_decks.pop(0))
+                    self.queue_window.refresh()
+                    self.initialize = False
+                time.sleep(1)
+            else:
+                process_time = time.time()
+                if len(self.queue_list) == 0:
+                    print("QUEUE LIST IS EMPTY. NO DECK MANAGEMENT POSSIBLE")
+                    time.sleep(2)
+                    continue
+                for deck_object in self.all_decks:
+                    if deck_object.status == "paused":
+                        self.deck_reset(deck_object)
+                    if deck_object.status == "playing":
+                        if deck_object in self.available_decks:
+                            self.available_decks.remove(deck_object)
+                        file_path = deck_object.run_command("get_property", "path")
+                        if file_path == "(null)":
+                            print("resetting deck{} - no file path".format(deck_object.deck_id))
+                            self.deck_reset(deck_object)
+                            if len(self.queue_list) > 0:
+                                self.load_song(self.queue_list.pop(0))
+                            continue
+                        pos = deck_object.run_command("get_property", "time_pos")
+                        pos = float(pos) if pos is not None else None
+                        if deck_object.song_type == "file":
+                            length = deck_object.run_command("get_property", "length")
+                            length = float(length) if length is not None else None
+                        else:
+                            length = None
+                        if pos is not None and length is not None:
+                            remaining = length - pos
+                            # TODO: dont hardcode the 5 sec wait time below
+                            if remaining < 5 and deck_object.status != "ending":
+                                print("deck{} {} => ending".format(deck_object.deck_id,  deck_object.status))
+                                deck_object.status = "ending"
+                                ending_timer = Timer(remaining - self.update_delay, self.deck_reset, args=[deck_object])
+                                ending_timer.start()
+                        if pos is None and file_path is None:
+                            deck_object.status = "stuck"
+                    if deck_object.status == "ending":
+                        for d in self.all_decks:
+                            if deck_object.deck_id == d.deck_id:
+                                continue
+                            elif d.status == "playing" or d.status == "loading" \
+                                    or d.status == "ending" or d.status == "paused":
+                                break
+                            else:
+                                print("deck{} ending".format(deck_object.deck_id))
+                                self.log_window.update("deck{} ending".format(deck_object.deck_id))
+                                if len(self.queue_list) > 0:
+                                    self.load_song(self.queue_list.pop(0), self.available_decks.pop(0))
+                                break
+                    if deck_object.status == "stuck":
+                        self.deck_reset(deck_object)
+                        if len(self.queue_list) > 0:
+                            self.load_song(self.queue_list.pop(0), self.available_decks.pop(0))
+                sleep_time = 1 + (0.5 - (process_time % 1))
+                if sleep_time > 0.0:
+                    time.sleep(sleep_time)
 
     @staticmethod
     def deck_reset(deck_object):
@@ -272,6 +277,20 @@ class MainWindow(tk.Tk):
             deck_object.root.available_decks.append(deck_object)
         print("deck{} reset".format(deck_object.deck_id))
         deck_object.root.log_window.update("deck{} reset".format(deck_object.deck_id))
+
+    def run_app(self):
+        print("app starting")
+        thread = Thread(name="schedule_thread", target=self.process_schedule, daemon=True)
+        thread.start()
+        time.sleep(1)
+        thread = Thread(name="deck_manage_thread", target=self.process_decks, daemon=True)
+        thread.start()
+        try:
+            self.mainloop()
+        except (KeyboardInterrupt, SystemExit):
+            self.close_app()
+        else:
+            self.close_app()
 
     def close_app(self):
         print("app closing")
@@ -289,7 +308,7 @@ class MainWindow(tk.Tk):
         def __init__(self, root, deck_id):
             self.width = 335
             self.height = 120
-            self.font = ("times", 11)
+            self.font = ("helvetica", 11)
             self.buffer_size = 512
             self.song_artist = ""
             self.song_title = ""
@@ -314,21 +333,21 @@ class MainWindow(tk.Tk):
             # Artist Label
             self.artist_label_var = tk.StringVar()
             self.artist_label_var.set(self.song_artist)
-            self.artist_label = tk.Label(self.deck_frame, font=self.font, bg="#000000", fg="#FFFFFF",
+            self.artist_label = tk.Label(self.deck_frame, font=self.font, bg="#000000", fg="#FFFFFF", anchor="w",
                                          textvariable=self.artist_label_var)
             self.artist_label.place(x=5, y=25, width=275, height=14)
 
             # Title Label
             self.title_label_var = tk.StringVar()
             self.title_label_var.set(self.song_title)
-            self.title_label = tk.Label(self.deck_frame, font=self.font, bg="#000000", fg="#FFFFFF",
+            self.title_label = tk.Label(self.deck_frame, font=self.font, bg="#000000", fg="#FFFFFF", anchor="w",
                                         textvariable=self.title_label_var)
             self.title_label.place(x=5, y=40, width=275, height=14)
 
             # File Path Label
             self.file_path_label_var = tk.StringVar()
             self.file_path_label_var.set(self.song_file_path)
-            self.file_path_label = tk.Label(self.deck_frame, font=self.font, bg="#555555", fg="#FFFFFF",
+            self.file_path_label = tk.Label(self.deck_frame, font=self.font, bg="#555555", fg="#FFFFFF", anchor="w",
                                             textvariable=self.file_path_label_var)
             self.file_path_label.place(x=5, y=55, width=275, height=14)
 
@@ -476,7 +495,7 @@ class MainWindow(tk.Tk):
 
     class QueueWindow:
         def __init__(self, root):
-            self.font = ("modern", 11)
+            self.font = ("helvetica", 11)
             self.root = root
             self.queue_frame = tk.Frame(self.root, width=680, height=200, bd=10, relief="ridge")
             self.queue_window = scrolledtext.ScrolledText(self.queue_frame, font=self.font, wrap=tk.WORD,
@@ -494,7 +513,7 @@ class MainWindow(tk.Tk):
     class LogWindow:
         def __init__(self, root):
             self.max_log_length = 500
-            self.font = ("modern", 11)
+            self.font = ("helvetica", 11)
             self.root = root
             self.log_frame = tk.Frame(self.root, width=680, height=140, bd=10, relief="ridge")
             self.log_window = scrolledtext.ScrolledText(self.log_frame, font=self.font, wrap=tk.WORD,
@@ -516,13 +535,5 @@ class MainWindow(tk.Tk):
 
 
 if __name__ == "__main__":
-    print("app starting")
     app_window = MainWindow()
-    thread = Thread(name="app_loop_thread", target=app_window.app_loop, daemon=True)
-    thread.start()
-    try:
-        app_window.mainloop()
-    except (KeyboardInterrupt, SystemExit):
-        app_window.close_app()
-    else:
-        app_window.close_app()
+    app_window.run_app()
