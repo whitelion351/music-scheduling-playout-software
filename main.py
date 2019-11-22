@@ -7,14 +7,17 @@ import tkinter as tk
 from tkinter import scrolledtext
 import subprocess
 import mplayer
+import pyaudio
+import audioread
+import samplerate
 import numpy as np
 from PIL import ImageTk, Image
 
 
 class MainWindow(tk.Tk):
-    def __init__(self, no_repeat_time=10):
+    def __init__(self, no_repeat_time=60):
         super(MainWindow, self).__init__()
-        self.title("Play out GUI")
+        self.title("Lion Music Scheduler")
         self.update_delay = 0.1
         self.canvas = tk.Canvas(self, width=699, height=499, bg="#555555")
         self.canvas.pack()
@@ -39,16 +42,20 @@ class MainWindow(tk.Tk):
         if deck_object is None:
             deck_object = self.deckA if self.deckA.status == "stopped" else self.deckB
         deck_object.song_type = "stream" if path.startswith("http") else "file"
-        print("deck{} LOAD: {}".format(deck_object.deck_id, path))
-        self.log_window.update("deck{} LOAD: {}".format(deck_object.deck_id, path))
+        info_string = "deck{} LOAD: {}".format(deck_object.deck_id, path)
+        print(info_string)
+        self.log_window.log_window_update(info_string)
         deck_object.song_file_path = path
-        deck_object.run_command("loadfile", path)
+        if deck_object.song_type == "stream":
+            deck_object.run_command("loadfile", path)
+            status_thread = Thread(name="deck" + deck_object.deck_id + " get_status_thread",
+                                   target=self.get_deck_status_threaded, args=[deck_object])
+            status_thread.start()
+        elif deck_object.song_type == "file":
+            deck_object.load_audio_file(path)
         if deck_object in self.available_decks:
             self.available_decks.remove(deck_object)
         self.queue_window.refresh()
-        status_thread = Thread(name="deck"+deck_object.deck_id+" get_status_thread",
-                               target=self.get_deck_status_threaded, args=[deck_object])
-        status_thread.start()
 
     @staticmethod
     def get_deck_status_threaded(deck_object):
@@ -116,7 +123,7 @@ class MainWindow(tk.Tk):
                                 new_items = []
                                 if entry_name != self.sched_name:
                                     print("new schedule group:", details[:4])
-                                    self.log_window.update("new schedule group: {}".format(details[:4]))
+                                    self.log_window.log_window_update("new schedule group: {}".format(details[:4]))
                                     print("using queue options = ", entry_options)
                                     if entry_name != "any" and entry_name != "none":
                                         self.sched_name = entry_name
@@ -153,8 +160,7 @@ class MainWindow(tk.Tk):
                         if d.status == "playing" or d.status == "loading":
                             print("executing immediate option")
                             d.status = "ending"
-                            # TODO: dont hardcode the 5 sec wait time below
-                            ending_timer = Timer(5 - self.update_delay, self.deck_reset, args=[d])
+                            ending_timer = Timer(d.fade_out_time - self.update_delay, self.deck_reset, args=[d])
                             ending_timer.start()
                             break
                     else:
@@ -187,7 +193,7 @@ class MainWindow(tk.Tk):
             full_list = os.listdir(path)
         except FileNotFoundError:
             print("directory {} not found".format(path))
-            self.log_window.update("directory {} not found".format(path))
+            self.log_window.log_window_update("directory {} not found".format(path))
             return None
         if path not in self.played_dict.keys():
             self.played_dict[path] = {}
@@ -203,10 +209,10 @@ class MainWindow(tk.Tk):
         if len(choices) > 0:
             choice = random.choice(choices)
             self.played_dict[path][choice] = time.time()
-            return "'" + path + choice + "'"
+            return path + choice
         else:
             print("no valid files found in {}".format(path))
-            self.log_window.update("no valid files found in {}".format(path))
+            self.log_window.log_window_update("no valid files found in {}".format(path))
             return None
 
     def process_decks(self):
@@ -229,30 +235,24 @@ class MainWindow(tk.Tk):
                     if deck_object.status == "playing":
                         if deck_object in self.available_decks:
                             self.available_decks.remove(deck_object)
-                        file_path = deck_object.run_command("get_property", "path")
-                        if file_path == "(null)":
-                            print("resetting deck{} - no file path".format(deck_object.deck_id))
-                            self.deck_reset(deck_object)
-                            if len(self.queue_list) > 0:
-                                self.load_song(self.queue_list.pop(0))
-                            continue
-                        pos = deck_object.run_command("get_property", "time_pos")
-                        pos = float(pos) if pos is not None else None
-                        if deck_object.song_type == "file":
-                            length = deck_object.run_command("get_property", "length")
-                            length = float(length) if length is not None else None
-                        else:
-                            length = None
-                        if pos is not None and length is not None:
-                            remaining = length - pos
-                            # TODO: dont hardcode the 5 sec wait time below
-                            if remaining < 5 and deck_object.status != "ending":
+                        if deck_object.song_type == "stream":
+                            file_path = deck_object.run_command("get_property", "path")
+                            if file_path == "(null)":
+                                print("resetting deck{} - no file path".format(deck_object.deck_id))
+                                self.deck_reset(deck_object)
+                                if len(self.queue_list) > 0:
+                                    self.load_song(self.queue_list.pop(0))
+                                continue
+                            pos = deck_object.run_command("get_property", "time_pos")
+                            if pos is None and file_path is None:
+                                deck_object.status = "stuck"
+                        elif deck_object.song_type == "file":
+                            if deck_object.remaining < deck_object.fade_out_time and deck_object.status != "ending":
                                 print("deck{} {} => ending".format(deck_object.deck_id,  deck_object.status))
                                 deck_object.status = "ending"
-                                ending_timer = Timer(remaining - self.update_delay, self.deck_reset, args=[deck_object])
+                                ending_timer = Timer(deck_object.remaining - self.update_delay,
+                                                     self.deck_reset, args=[deck_object])
                                 ending_timer.start()
-                        if pos is None and file_path is None:
-                            deck_object.status = "stuck"
                     if deck_object.status == "ending":
                         for d in self.all_decks:
                             if deck_object.deck_id == d.deck_id:
@@ -262,7 +262,6 @@ class MainWindow(tk.Tk):
                                 break
                             else:
                                 print("deck{} ending".format(deck_object.deck_id))
-                                self.log_window.update("deck{} ending".format(deck_object.deck_id))
                                 if len(self.queue_list) > 0:
                                     self.load_song(self.queue_list.pop(0), self.available_decks.pop(0))
                                 break
@@ -276,17 +275,20 @@ class MainWindow(tk.Tk):
 
     @staticmethod
     def deck_reset(deck_object):
-        deck_object.run_command("stop")
+        if deck_object.song_type == "stream":
+            deck_object.run_command("stop")
         deck_object.status = "stopped"
         deck_object.song_type = ""
         deck_object.song_file_path = ""
         deck_object.song_artist = ""
         deck_object.song_title = ""
+        deck_object.volume = 0.6
+        deck_object.remaining = 999
+        deck_object.raw_chunk = bytes(2)
         deck_object.reset_view(deck_object)
         if deck_object not in deck_object.root.available_decks:
             deck_object.root.available_decks.append(deck_object)
         print("deck{} reset".format(deck_object.deck_id))
-        deck_object.root.log_window.update("deck{} reset".format(deck_object.deck_id))
 
     def run_app(self):
         print("app starting")
@@ -304,13 +306,12 @@ class MainWindow(tk.Tk):
 
     def close_app(self):
         print("app closing")
-        self.log_window.update("app closing")
         self.deckA.running = False
         self.deckB.running = False
         self.deckA.status = "quitting"
         self.deckB.status = "quitting"
-        self.deckA.audio_player.quit()
-        self.deckB.audio_player.quit()
+        self.deckA.stream_player.quit()
+        self.deckB.stream_player.quit()
         time.sleep(1)
         self.quit()
 
@@ -324,11 +325,51 @@ class MainWindow(tk.Tk):
             self.song_title = ""
             self.song_file_path = ""
             self.song_type = ""
+            self.sample_rate = 44100
+            self.resampler = None
+            self.resample = False
+            self.mono = False
+            self.ratio = 1
+            self.channels = 2
+            self.duration = 0
+            self.remaining = 999
+            self.song_start_time = -1
             self.status = "stopped"
             self.running = True
             self.update_delay = root.update_delay
             self.last_time_pos = 0.0
             self.root = root
+
+            # MPlayer creation for playing streams only
+            self.data_file_path = "/tmp/deck"+deck_id
+            deck_arg = "-af export="+self.data_file_path+":"+str(self.buffer_size)
+            self.deck_id = deck_id
+            mplayer.Player._base_args = ('-slave', '-idle', "-quiet")
+            self.stream_player = mplayer.Player(args=deck_arg, stderr=subprocess.PIPE, autospawn=True)
+            self.stream_player.stdout.connect(self.out_log)
+            self.stream_player.stderr.connect(self.err_log)
+            self.run_command = self.stream_player._run_command
+
+            # pyaudio and audioread creation for reading files only
+            self.chunk_size = 2048
+            self.audio_in = audioread
+            self.port_audio = pyaudio.PyAudio()
+            self.audio_out = None
+            self.create_audio_out_stream()
+            self.available_backends = audioread.available_backends()
+            self.file_stream = []
+            self.raw_chunk = bytes(2)
+            self.volume = 0.6
+            self.fade_out_decay = 0.0055
+            self.fade_out_time = 5
+
+            # add deck to deck lists
+            root.all_decks.append(self)
+            root.available_decks.append(self)
+
+            # start file play thread
+            thread = Thread(name="deck" + self.deck_id + "_play", target=self.play_audio_file, daemon=True)
+            thread.start()
 
             # Background Frame
             self.deck_frame = tk.Frame(root, width=self.width, height=self.height, bd=10, relief="ridge")
@@ -373,22 +414,113 @@ class MainWindow(tk.Tk):
                                          textvariable=self.status_label_var)
             self.status_label.place(anchor="center", relx=0.9, rely=0.9, width=60, height=12)
 
-            # MPlayer creation
-            self.data_file_path = "/tmp/deck"+deck_id
-            deck_arg = "-af export="+self.data_file_path+":"+str(self.buffer_size)
-            self.deck_id = deck_id
-            mplayer.Player._base_args = ('-slave', '-idle', "-quiet")
-            self.audio_player = mplayer.Player(args=deck_arg, stderr=subprocess.PIPE, autospawn=True)
-            self.audio_player.stdout.connect(self.out_log)
-            self.audio_player.stderr.connect(self.err_log)
-            self.run_command = self.audio_player._run_command
+            self.next_button = tk.Button(self.deck_frame, font=self.font, text="Next", command=self.next_in_queue)
+            self.next_button.place(anchor="center", x=200, y=85, width=50, height=20)
 
-            # add deck to deck lists
-            root.all_decks.append(self)
-            root.available_decks.append(self)
             update_thread = Thread(name="deck"+self.deck_id+" update_view_thread",
                                    target=self.update_view, args=[self], daemon=True)
             update_thread.start()
+
+        def load_audio_file(self, path=None):
+            if path is None:
+                print("you must pass a path to get_file_audio")
+                return False
+            self.file_stream = []
+            try:
+                with self.audio_in.audio_open(path=path, backends=self.available_backends) as f:
+                    rate = f.samplerate
+                    chan = f.channels
+                    dur = f.duration
+                    self.mono = True if chan == 1 else False
+                    if rate != self.sample_rate or self.mono is True:
+                        self.ratio = self.sample_rate / rate
+                        self.resampler = samplerate.Resampler(converter_type="sinc_best", channels=chan)
+                        self.resample = True
+                        print("resample {} Hz {} ch => {} Hz {} ch".format(rate, chan, self.sample_rate, self.channels))
+                        for buf in f:
+                            self.file_stream.append(buf)
+                    else:
+                        self.resample = False
+                        for buf in f:
+                            self.file_stream.append(buf)
+
+            except Exception as e:
+                print(e)
+                self.sample_rate = 0
+                self.channels = 0
+                self.duration = 0
+                return False
+            else:
+                self.duration = dur
+                self.song_artist = self.get_ffprobe_info(path, "artist")
+                self.song_title = self.get_ffprobe_info(path, "title")
+                self.status = "playing"
+                return True
+
+        def create_audio_out_stream(self):
+            if self.audio_out is not None:
+                self.audio_out.close()
+            self.audio_out = self.port_audio.open(format=pyaudio.paInt16, channels=self.channels,
+                                                  rate=self.sample_rate, output=True,
+                                                  frames_per_buffer=self.chunk_size)
+
+        @staticmethod
+        def get_ffprobe_info(path=None, tag=None):
+            if path is None or tag is None:
+                print("your need to pass the path and tag to look for with ffprobe")
+                return ""
+            sub_command_string = ["ffprobe", "-v", "error", "-show_entries", "format_tags={}".format(tag),
+                                  "-of", "default=nk=1:nw=1", path]
+            std_out = subprocess.run(sub_command_string, stdout=subprocess.PIPE)
+            if len(std_out.stdout) > 0:
+                return std_out.stdout.decode().rstrip("\n")
+            else:
+                return ""
+
+        def play_audio_file(self):
+            self.play_tread_active = True
+            while self.running is True:
+                if self.status == "playing" and self.song_type == "file":
+                    self.song_start_time = time.time()
+                    while len(self.file_stream) > 0 and (self.status == "playing" or self.status == "ending"):
+                        while self.audio_out.get_write_available() > self.chunk_size:
+                            if len(self.file_stream) == 0:
+                                break
+                            self.raw_chunk = self.file_stream.pop(0)
+                            processed_chunk = self.raw_chunk
+
+                            # adjust volume is necessary
+                            processed_chunk = np.frombuffer(processed_chunk, dtype=np.int16) * self.volume
+                            processed_chunk = np.array(processed_chunk, dtype=np.int16)
+                            if self.status == "ending":
+                                self.volume -= self.fade_out_decay if self.volume - self.fade_out_decay >= 0 else 0
+
+                            # resample if necessary
+                            if self.resample is True:
+                                buf = np.frombuffer(processed_chunk, dtype=np.int16)
+                                if self.mono is False:
+                                    buf = np.array([buf[::2], buf[1:][::2]]).transpose()
+                                buf = self.resampler.process(buf, self.ratio)
+                                if self.mono is False:
+                                    processed_chunk = buf.flatten().astype(np.int16)
+                                else:
+                                    buf = np.array([buf, buf])
+                                    processed_chunk = buf.transpose().flatten().astype(np.int16)
+
+                            # convert back to bytes if necessary
+                            if type(processed_chunk) != bytes:
+                                processed_chunk = processed_chunk.tobytes()
+                            self.audio_out.write(processed_chunk)
+                        self.remaining = (self.song_start_time + self.duration) - time.time()
+                        time.sleep(0.001)
+                    if self.status != "stopped":
+                        self.status = "stopped"
+                    if self not in self.root.available_decks:
+                        self.root.available_decks.append(self)
+                else:
+                    while self.status != "f_loading" and self.audio_out.get_write_available() > self.chunk_size:
+                        self.audio_out.write(bytes(self.chunk_size))
+                    time.sleep(0.005)
 
         def out_log(self, data):
             # print("deck{} LOG: {}".format(self.deck_id, data))
@@ -413,13 +545,28 @@ class MainWindow(tk.Tk):
             pass
             # print(data)
 
+        def next_in_queue(self):
+            if self.status == "playing":
+                self.status = "ending"
+                thread = Timer(self.fade_out_time, self.root.deck_reset, args=[self])
+                thread.start()
+
         @staticmethod
         def update_view(deck_object):
             try:
                 last_update = time.time()
+                last_volume = 0
                 while deck_object.running is True:
                     if deck_object.status == "playing" or deck_object.status == "ending":
-                        vol_level = deck_object.get_volume_level() * 1.5
+                        if deck_object.song_type == "stream":
+                            vol_level = deck_object.get_volume_level()
+                        elif deck_object.song_type == "file":
+                            vol_level = np.frombuffer(deck_object.raw_chunk, dtype=np.int16).max()
+                        else:
+                            vol_level = 0
+                        if vol_level < last_volume:
+                            vol_level = last_volume - 5000
+                        last_volume = vol_level
                         deck_object.vol_image = deck_object.get_volume_image(vol_level)
                         deck_object.volume_display.configure(image=deck_object.vol_image)
                         if time.time() - last_update > 1:
@@ -428,7 +575,12 @@ class MainWindow(tk.Tk):
                             if deck_object.file_path_label_var.get() != deck_object.song_file_path:
                                 deck_object.file_path_label_var.set(deck_object.song_file_path)
                             # update time
-                            time_string = deck_object.get_time_pos(deck_object.run_command("get_property", "time_pos"))
+                            time_string = None
+                            if deck_object.song_type == "stream":
+                                time_string = deck_object.get_time_pos(deck_object.run_command("get_property",
+                                                                                               "time_pos"))
+                            elif deck_object.song_type == "file":
+                                time_string = deck_object.get_time_pos(time.time() - deck_object.song_start_time)
                             if time_string is not None and time_string != deck_object.time_label_var.get():
                                 deck_object.time_label_var.set(time_string)
                             # update song artist
@@ -470,9 +622,8 @@ class MainWindow(tk.Tk):
                     data = f.read()
                 data = data[16:]
                 if len(data) > 2:
-                    data = struct.unpack(str(int(len(data)/2))+"h", data)
-                    data = abs(max(data))
-                    return data
+                    vol = np.abs(np.frombuffer(data, dtype=np.int16)).max()
+                    return vol
                 else:
                     return 0
             except (FileNotFoundError, struct.error):
@@ -526,11 +677,10 @@ class MainWindow(tk.Tk):
             self.font = ("helvetica", 11)
             self.root = root
             self.log_frame = tk.Frame(self.root, width=680, height=140, bd=10, relief="ridge")
-            self.log_window = scrolledtext.ScrolledText(self.log_frame, font=self.font, wrap=tk.WORD,
-                                                        state="disabled")
+            self.log_window = scrolledtext.ScrolledText(self.log_frame, font=self.font, wrap=tk.WORD, state="disabled")
             self.log_window.place(x=0, y=0, relwidth=1.0, relheight=1.0)
 
-        def update(self, entry=None):
+        def log_window_update(self, entry=None):
 
             if entry is None:
                 return
