@@ -11,15 +11,21 @@ python 3.x
 
 `pip install mplayer.py`
 
-`pip install tkinter`
+`pip install pyaudio`
 
-some systems i tested also needed `sudo apt-get install python3-pil.imagetk`
+`pip install audioread`
+
+`pip install samplerate`
+
+`pip install tkinter`
 
 `pip install numpy`
 
 `pip install pillow`
 
-Scheduling is configured through the text file "schedule.txt". The format of this file is as follows:
+some systems i tested also needed `sudo apt-get install python3-pil.imagetk`
+
+Scheduling is done through the text file "schedule.txt". The format of this file is as follows:
 
 [entry]
 
@@ -79,4 +85,4 @@ This format can be repeated any number of times for different scheduled blocks.
 
 # Class parameters
 
-`no_repeat_time=(num of mins)` - Number of minutes before a file selected from a folder can play again. Defaults to 10 minutes
+`no_repeat_time=(num of mins)` - Number of minutes before a file selected from a folder can play again. Defaults to 60 minutes
