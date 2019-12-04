@@ -21,7 +21,7 @@ some systems I tested also needed `sudo apt-get install python3-pil.imagetk`
 
 Also needed is ffmpeg
 
-Linux users: `pip install tkinter`
+Linux users: `sudo apt-get install ffmpeg`
 
 Windows users: `https://www.ffmpeg.org/download.html`. Download the binary
 
