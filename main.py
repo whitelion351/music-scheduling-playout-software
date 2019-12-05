@@ -66,12 +66,15 @@ class MainWindow(tk.Tk):
     def load_next_in_queue(self):
         for d in self.all_decks:
             if d.status == "playing":
+                print("deck{} {} => user ending".format(d.deck_id, d.status))
                 d.status = "ending"
                 thread = Timer(d.fade_out_time, self.deck_reset, args=[d])
                 thread.start()
                 break
 
     def remove_next_in_queue(self):
+        if len(self.queue_list) == 0:
+            return
         item = self.queue_list.pop(0)
         split_index = item.rfind("/")
         split_index = item.rfind("\\") if split_index == -1 else split_index
@@ -177,7 +180,7 @@ class MainWindow(tk.Tk):
             if sleep_time > 0.0:
                 time.sleep(sleep_time)
             if int(time.time()) - int(process_time) != 1 and self.initialize is False:
-                print("schedule not in time {} not 1 less than {}".format(int(process_time), int(time.time())))
+                print("scheduler missed a second ({})".format(int(time.time()) - int(process_time)))
 
     @staticmethod
     def get_secs_from_sched_time(entry):
@@ -245,9 +248,6 @@ class MainWindow(tk.Tk):
                                 if len(self.queue_list) > 0:
                                     self.load_from_queue(self.queue_list.pop(0))
                                 continue
-#                            pos = deck_object.run_command("get_property", "time_pos")
-#                            if pos is None and file_path is None:
-#                                deck_object.status = "stuck"
                         elif deck_object.song_type == "file":
                             if deck_object.remaining < deck_object.fade_out_time and deck_object.status != "ending":
                                 print("deck{} {} => ending".format(deck_object.deck_id,  deck_object.status))
@@ -262,7 +262,6 @@ class MainWindow(tk.Tk):
                             elif d.status == "playing" or d.status == "loading" or d.status == "ending":
                                 break
                             else:
-                                print("deck{} {} => ending".format(deck_object.deck_id, deck_object.status))
                                 if len(self.queue_list) > 0:
                                     self.load_from_queue(self.queue_list.pop(0), self.available_decks.pop(0))
                                 break
@@ -362,7 +361,14 @@ class MainWindow(tk.Tk):
             self.time_label_var.set("00:00:00")
             self.time_label = tk.Label(self.deck_frame, font=self.font, bg="#000000", fg="#FFFFFF",
                                        textvariable=self.time_label_var)
-            self.time_label.place(anchor="ne", x=280, y=10, width=60, height=14)
+            self.time_label.place(x=5, y=10, width=60, height=14)
+
+            # Duration Label
+            self.duration_label_var = tk.StringVar()
+            self.duration_label_var.set("00:00:00")
+            self.duration_label = tk.Label(self.deck_frame, font=self.font, bg="#000000", fg="#FFFFFF",
+                                           textvariable=self.duration_label_var)
+            self.duration_label.place(anchor="ne", x=280, y=10, width=60, height=14)
 
             # Artist Label
             self.artist_label_var = tk.StringVar()
@@ -415,7 +421,7 @@ class MainWindow(tk.Tk):
                 resp.close()
                 self.root.deck_reset()
                 return
-            else:
+            elif "icy-name" in resp.headers.keys():
                 self.song_artist = resp.headers["icy-name"]
             metaint_header = "icy-metaint"
             if metaint_header in resp.headers.keys():
@@ -491,7 +497,8 @@ class MainWindow(tk.Tk):
             print("deck{} {} => loading".format(self.deck_id, self.status))
             self.status = "loading"
             try:
-                ff_proc = subprocess.Popen(["ffmpeg", "-hide_banner", "-i", path, "-f", "s16le", "-ac", "2", "pipe:"],
+                ff_proc = subprocess.Popen(["ffmpeg", "-hide_banner", "-i", path, "-f", "s16le", "-ar",
+                                            str(self.sample_rate), "-ac", str(self.channels), "pipe:"],
                                            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
                 done = False
                 while done is False:
@@ -565,6 +572,7 @@ class MainWindow(tk.Tk):
 
         def next_in_queue(self):
             if self.status == "playing":
+                print("deck{} {} => user ending".format(self.deck_id, self.status))
                 self.status = "ending"
                 thread = Timer(self.fade_out_time, self.root.deck_reset, args=[self])
                 thread.start()
@@ -592,10 +600,13 @@ class MainWindow(tk.Tk):
                             # update song file path
                             if deck_object.file_path_label_var.get() != deck_object.song_file_path:
                                 deck_object.file_path_label_var.set(deck_object.song_file_path)
-                            # update current and remaining time
+                            # update current and remaining time and duration
                             time_string = deck_object.get_time_pos(time.time() - deck_object.song_start_time)
                             if time_string is not None and time_string != deck_object.time_label_var.get():
                                 deck_object.time_label_var.set(time_string)
+                            duration_string = deck_object.get_time_pos(deck_object.duration)
+                            if duration_string != deck_object.duration_label_var.get():
+                                deck_object.duration_label_var.set(duration_string)
                             deck_object.remaining = (deck_object.song_start_time + deck_object.duration) - time.time()
                             # update song artist
                             if deck_object.artist_label_var.get() != deck_object.song_artist:
@@ -615,6 +626,7 @@ class MainWindow(tk.Tk):
         @staticmethod
         def reset_view(deck_object):
             deck_object.time_label_var.set("")
+            deck_object.duration_label_var.set("")
             deck_object.file_path_label_var.set("")
             deck_object.artist_label_var.set("")
             deck_object.title_label_var.set("")
