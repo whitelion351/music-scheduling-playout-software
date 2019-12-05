@@ -16,15 +16,16 @@ class MainWindow(tk.Tk):
         super(MainWindow, self).__init__()
         self.title("Lion Music Scheduler")
         self.update_delay = 0.1
-        self.canvas = tk.Canvas(self, width=699, height=499, bg="#555555")
+        self.canvas = tk.Canvas(self, width=799, height=549, bg="#555555")
         self.canvas.pack()
+        self.resizable(width=False, height=False)
         self.all_decks = []
         self.available_decks = []
         self.master_volume = 1.0
         self.deckA = self.PlayerDeck(self, "A")
         self.deckB = self.PlayerDeck(self, "B")
         self.deckA.deck_frame.place(x=10, y=10)
-        self.deckB.deck_frame.place(x=355, y=10)
+        self.deckB.deck_frame.place(x=405, y=10)
         self.font = ("helvetica", 10)
         self.master_volume_var = tk.StringVar()
         self.master_volume_var.set(str(int(self.master_volume*100))+"%")
@@ -41,7 +42,7 @@ class MainWindow(tk.Tk):
         self.queue_window = self.QueueWindow(self)
         self.queue_window.queue_frame.place(x=10, y=160)
         self.log_window = self.LogWindow(self)
-        self.log_window.log_frame.place(x=10, y=350)
+        self.log_window.log_frame.place(x=10, y=390)
         self.queue_list = []
         self.valid_exts = [".mp3", ".wav", ".ogg", ".wma", ".flac"]
         self.played_dict = {}
@@ -314,10 +315,10 @@ class MainWindow(tk.Tk):
 
     class PlayerDeck:
         def __init__(self, root, deck_id):
-            self.width = 335
+            self.width = 385
             self.height = 120
             self.font = ("helvetica", 10)
-            self.buffer_size = 800
+            self.buffer_size = 1024
             self.song_artist = ""
             self.song_title = ""
             self.song_file_path = ""
@@ -368,28 +369,28 @@ class MainWindow(tk.Tk):
             self.duration_label_var.set("00:00:00")
             self.duration_label = tk.Label(self.deck_frame, font=self.font, bg="#000000", fg="#FFFFFF",
                                            textvariable=self.duration_label_var)
-            self.duration_label.place(anchor="ne", x=280, y=10, width=60, height=14)
+            self.duration_label.place(anchor="ne", x=325, y=10, width=60, height=14)
 
             # Artist Label
             self.artist_label_var = tk.StringVar()
             self.artist_label_var.set(self.song_artist)
             self.artist_label = tk.Label(self.deck_frame, font=self.font, bg="#000000", fg="#FFFFFF", anchor="w",
                                          textvariable=self.artist_label_var)
-            self.artist_label.place(x=5, y=25, width=275, height=14)
+            self.artist_label.place(x=5, y=25, width=320, height=14)
 
             # Title Label
             self.title_label_var = tk.StringVar()
             self.title_label_var.set(self.song_title)
             self.title_label = tk.Label(self.deck_frame, font=self.font, bg="#000000", fg="#FFFFFF", anchor="w",
                                         textvariable=self.title_label_var)
-            self.title_label.place(x=5, y=40, width=275, height=14)
+            self.title_label.place(x=5, y=40, width=320, height=14)
 
             # File Path Label
             self.file_path_label_var = tk.StringVar()
             self.file_path_label_var.set(self.song_file_path)
             self.file_path_label = tk.Label(self.deck_frame, font=self.font, bg="#555555", fg="#FFFFFF", anchor="w",
                                             textvariable=self.file_path_label_var)
-            self.file_path_label.place(x=5, y=55, width=275, height=14)
+            self.file_path_label.place(x=5, y=55, width=320, height=14)
 
             # volume VU Meter
             self.vol_image = self.create_volume_image()
@@ -403,8 +404,9 @@ class MainWindow(tk.Tk):
                                          textvariable=self.status_label_var)
             self.status_label.place(anchor="center", relx=0.9, rely=0.9, width=60, height=12)
 
+            # Next Button
             self.next_button = tk.Button(self.deck_frame, font=self.font, text="Next", command=self.next_in_queue)
-            self.next_button.place(anchor="center", x=200, y=85, width=50, height=20)
+            self.next_button.place(anchor="center", x=250, y=85, width=50, height=20)
 
             update_thread = Thread(name="deck"+self.deck_id+" update_view_thread",
                                    target=self.update_view, args=[self], daemon=True)
@@ -416,10 +418,16 @@ class MainWindow(tk.Tk):
             self.status = "loading"
 
             headers = {"user-agent": "Lion Broadcaster", "Icy-MetaData": "1"}
-            resp = requests.get(path, headers=headers, stream=True)
+            try:
+                resp = requests.get(path, headers=headers, stream=True)
+            except requests.exceptions.ConnectionError as e:
+                print("Could not connect to", path)
+                self.root.deck_reset(self)
+                return
             if resp.status_code != 200:
+                print("server returned", resp.status_code)
                 resp.close()
-                self.root.deck_reset()
+                self.root.deck_reset(self)
                 return
             elif "icy-name" in resp.headers.keys():
                 self.song_artist = resp.headers["icy-name"]
@@ -470,13 +478,13 @@ class MainWindow(tk.Tk):
                             self.song_title = song_title[13:].rstrip("\';")
                 except StopIteration:
                     connected = False
-                    print("no more data")
+                    print("deck{} no more data".format(self.deck_id))
             ff_proc.kill()
             resp.close()
             self.status = "stopped" if self.status != "stopped" else self.status
             stdout_thread.join()
             stderr_thread.join()
-            print("stream thread closed")
+            print("deck{} stream thread closed".format(self.deck_id))
 
         def read_stdout(self, out):
             while self.status != "stopped":
@@ -678,7 +686,7 @@ class MainWindow(tk.Tk):
         def __init__(self, root):
             self.font = ("helvetica", 10)
             self.root = root
-            self.queue_frame = tk.Frame(self.root, width=680, height=180, bd=10, relief="ridge")
+            self.queue_frame = tk.Frame(self.root, width=780, height=220, bd=10, relief="ridge")
             self.queue_window = scrolledtext.ScrolledText(self.queue_frame, font=self.font, wrap=tk.WORD,
                                                           state="disabled")
             self.queue_window.place(x=0, y=0, relwidth=1.0, relheight=1.0)
@@ -696,7 +704,7 @@ class MainWindow(tk.Tk):
             self.max_log_length = 500
             self.font = ("helvetica", 10)
             self.root = root
-            self.log_frame = tk.Frame(self.root, width=680, height=140, bd=10, relief="ridge")
+            self.log_frame = tk.Frame(self.root, width=780, height=150, bd=10, relief="ridge")
             self.log_window = scrolledtext.ScrolledText(self.log_frame, font=self.font, wrap=tk.WORD, state="disabled")
             self.log_window.place(x=0, y=0, relwidth=1.0, relheight=1.0)
 
