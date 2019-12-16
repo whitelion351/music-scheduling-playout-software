@@ -165,7 +165,6 @@ class MainWindow(tk.Tk):
                     self.queue_list = new_items
                 else:
                     self.queue_list.extend(new_items)
-                print("added {} to queue. queue_length = {}".format(total_added, len(self.queue_list)))
                 if do_immediate is True:
                     for d in self.all_decks:
                         if d.status == "playing" or d.status == "loading":
@@ -247,8 +246,9 @@ class MainWindow(tk.Tk):
                             file_path = deck_object.song_file_path
                             if file_path == "":
                                 print("resetting deck{} - no file path".format(deck_object.deck_id))
-                                self.deck_reset(deck_object)
-                                continue
+                                deck_object.status = "ending"
+                                ending_timer = Timer(2, self.deck_reset, args=[deck_object])
+                                ending_timer.start()
                         elif deck_object.song_type == "file":
                             if deck_object.remaining < deck_object.fade_out_time and deck_object.status != "ending":
                                 print("deck{} {} => ending".format(deck_object.deck_id,  deck_object.status))
@@ -284,7 +284,7 @@ class MainWindow(tk.Tk):
         deck_object.volume = self.master_volume
         deck_object.duration = 0
         deck_object.remaining = 9999
-        deck_object.raw_chunk = bytes(2)
+        deck_object.raw_chunk = bytes(deck_object.chunk_size)
         deck_object.reset_view()
         print("deck{} reset".format(deck_object.deck_id))
 
@@ -338,7 +338,7 @@ class MainWindow(tk.Tk):
             self.audio_out = None
             self.create_audio_out_stream()
             self.file_stream = []
-            self.raw_chunk = bytes(2)
+            self.raw_chunk = bytes(self.chunk_size)
             self.volume = self.root.master_volume
             self.fade_out_decay = 0.005
             self.fade_out_time = 6
@@ -484,7 +484,7 @@ class MainWindow(tk.Tk):
                     connected = False
                     if self.status == "playing":
                         print("deck{} received stopiteration while playing. this is bad".format(self.deck_id))
-                        self.status = "ending"
+                        self.song_file_path = ""
             ff_proc.kill()
             resp.close()
             stdout_thread.join()
