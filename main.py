@@ -93,7 +93,7 @@ class MainWindow(tk.Tk):
         if deck_object is None:
             deck_object = self.deckA if self.deckA.status == "stopped" else self.deckB
         deck_object.song_type = "stream" if path.startswith("http") else "file"
-        info_string = "deck{} LOAD: {}".format(deck_object.deck_id, path)
+        info_string = "deck{}: {}".format(deck_object.deck_id, path)
         print(info_string)
         self.log_window.log_window_update(info_string)
         deck_object.song_file_path = path
@@ -340,7 +340,7 @@ class MainWindow(tk.Tk):
             self.file_stream = []
             self.raw_chunk = bytes(self.chunk_size)
             self.volume = self.root.master_volume
-            self.fade_out_decay = 0.005
+            self.fade_out_decay = 0.0045
             self.fade_out_time = 6
 
             # add deck to deck lists
@@ -573,6 +573,9 @@ class MainWindow(tk.Tk):
                     self.song_start_time = time.time()
                     while len(self.file_stream) > 0 and (self.status == "playing" or self.status == "ending"):
                         processed_chunk = self.file_stream.pop(0)
+                        if len(processed_chunk) == 0:
+                            print("deck{} audio chunk size was 0".format(self.deck_id))
+                            processed_chunk = bytes(self.chunk_size)
                         # adjust volume is necessary
                         if self.status == "ending":
                             self.volume -= self.fade_out_decay if self.volume - self.fade_out_decay >= 0 else 0
@@ -596,47 +599,50 @@ class MainWindow(tk.Tk):
                 thread.start()
 
         @staticmethod
-        def update_view(deck_object):
+        def update_view(deck_obj):
             try:
                 last_update = time.time()
                 last_volume = 0
-                while deck_object.running is True:
-                    if deck_object.status == "playing" or deck_object.status == "ending":
-                        vol_level = np.frombuffer(deck_object.raw_chunk, dtype=np.int16).max()
+                while deck_obj.running is True:
+                    if deck_obj.status == "playing" or deck_obj.status == "ending":
+                        if len(deck_obj.raw_chunk) == 0:
+                            vol_level = 0
+                        else:
+                            vol_level = np.frombuffer(deck_obj.raw_chunk, dtype=np.int16).max()
                         if vol_level < last_volume:
                             vol_level = last_volume - 2000
                         last_volume = vol_level
-                        deck_object.vol_image = deck_object.get_volume_image(vol_level)
-                        deck_object.volume_display.configure(image=deck_object.vol_image)
+                        deck_obj.vol_image = deck_obj.get_volume_image(vol_level)
+                        deck_obj.volume_display.configure(image=deck_obj.vol_image)
                         if time.time() - last_update > 1:
                             last_update = time.time()
                             # update song file path
-                            if deck_object.file_path_label_var.get() != deck_object.song_file_path:
-                                deck_object.file_path_label_var.set(deck_object.song_file_path)
+                            if deck_obj.file_path_label_var.get() != deck_obj.song_file_path:
+                                deck_obj.file_path_label_var.set(deck_obj.song_file_path)
                             # update current and remaining time and duration
-                            time_string = deck_object.get_time_pos(time.time() - deck_object.song_start_time)
-                            if time_string is not None and time_string != deck_object.time_label_var.get():
-                                deck_object.time_label_var.set(time_string)
-                            duration_string = deck_object.get_time_pos(deck_object.duration)
-                            if duration_string != deck_object.duration_label_var.get():
-                                deck_object.duration_label_var.set(duration_string)
-                            if deck_object.song_type == "file":
-                                deck_object.remaining = (deck_object.song_start_time+deck_object.duration)-time.time()+1
-                                remaining_string = deck_object.get_time_pos(deck_object.remaining)
-                                if remaining_string != deck_object.remaining_label_var.get():
-                                    deck_object.remaining_label_var.set(remaining_string)
+                            time_string = deck_obj.get_time_pos(time.time() - deck_obj.song_start_time)
+                            if deck_obj.status != "stopped" and time_string != deck_obj.time_label_var.get():
+                                deck_obj.time_label_var.set(time_string)
+                            duration_string = deck_obj.get_time_pos(deck_obj.duration)
+                            if deck_obj.status != "stopped" and duration_string != deck_obj.duration_label_var.get():
+                                deck_obj.duration_label_var.set(duration_string)
+                            if deck_obj.song_type == "file":
+                                deck_obj.remaining = (deck_obj.song_start_time + deck_obj.duration) - time.time() + 1
+                                remaining_string = deck_obj.get_time_pos(deck_obj.remaining)
+                                if remaining_string != deck_obj.remaining_label_var.get():
+                                    deck_obj.remaining_label_var.set(remaining_string)
                             # update song artist
-                            if deck_object.artist_label_var.get() != deck_object.song_artist:
-                                deck_object.artist_label_var.set(deck_object.song_artist)
+                            if deck_obj.artist_label_var.get() != deck_obj.song_artist:
+                                deck_obj.artist_label_var.set(deck_obj.song_artist)
                             # update song title
-                            if deck_object.title_label_var.get() != deck_object.song_title:
-                                deck_object.title_label_var.set(deck_object.song_title)
+                            if deck_obj.title_label_var.get() != deck_obj.song_title:
+                                deck_obj.title_label_var.set(deck_obj.song_title)
                             # update deck status
-                            if deck_object.status_label_var.get() != deck_object.status:
-                                deck_object.status_label_var.set(deck_object.status)
+                            if deck_obj.status_label_var.get() != deck_obj.status:
+                                deck_obj.status_label_var.set(deck_obj.status)
                     else:
                         last_update = time.time()
-                    time.sleep(deck_object.update_delay)
+                    time.sleep(deck_obj.update_delay)
             except (RuntimeError, AttributeError) as upd_view_err:
                 print(upd_view_err)
 
@@ -703,21 +709,22 @@ class MainWindow(tk.Tk):
 
     class LogWindow:
         def __init__(self, root):
-            self.max_log_length = 500
+            self.max_log_length = 200
             self.font = ("helvetica", 10)
             self.root = root
             self.log_frame = tk.Frame(self.root, width=780, height=150, bd=10, relief="ridge")
             self.log_window = scrolledtext.ScrolledText(self.log_frame, font=self.font, wrap=tk.WORD, state="disabled")
             self.log_window.place(x=0, y=0, relwidth=1.0, relheight=1.0)
+            self.log_window_update("BEGIN LOGGING")
 
         def log_window_update(self, entry=None):
 
             if entry is None:
                 return
             self.log_window.configure(state="normal")
-            self.log_window.insert(tk.END, entry + "\n")
             log_text_raw = self.log_window.get(0.0, tk.END)
             log_text = log_text_raw.split("\n")
+            self.log_window.insert(tk.END, entry + "\n")
             if len(log_text) > self.max_log_length + 2:
                 self.log_window.delete(0.0, 2.0)
             self.log_window.configure(state="disabled")
