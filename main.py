@@ -67,7 +67,6 @@ class MainWindow(tk.Tk):
     def load_next_in_queue(self):
         for d in self.all_decks:
             if d.status == "playing":
-                print("deck{} {} => user ending".format(d.deck_id, d.status))
                 d.status = "ending"
                 thread = Timer(d.fade_out_time, self.deck_reset, args=[d])
                 thread.start()
@@ -94,7 +93,6 @@ class MainWindow(tk.Tk):
             deck_object = self.deckA if self.deckA.status == "stopped" else self.deckB
         deck_object.song_type = "stream" if path.startswith("http") else "file"
         info_string = "deck{}: {}".format(deck_object.deck_id, path)
-        print(info_string)
         self.log_window.log_window_update(info_string)
         deck_object.song_file_path = path
         if deck_object.song_type == "stream":
@@ -133,16 +131,12 @@ class MainWindow(tk.Tk):
                                 reading = True
                                 new_items = []
                                 if entry_name != self.sched_name:
-                                    print("new schedule group:", details[:4])
                                     self.log_window.log_window_update("new schedule group: {}".format(details[:4]))
-                                    print("using queue options = ", entry_options)
                                     if entry_name != "any" and entry_name != "none":
                                         self.sched_name = entry_name
                                     if "clear" in entry_options:
-                                        print("queue_list was cleared")
                                         self.queue_list = []
                                     if entry_top != "none":
-                                        print("added show top:", entry_top)
                                         new_items.append(entry_top)
                                         total_added += 1
                                     if "immediate" in entry_options:
@@ -168,16 +162,15 @@ class MainWindow(tk.Tk):
                 if do_immediate is True:
                     for d in self.all_decks:
                         if d.status == "playing" or d.status == "loading":
-                            print("executing immediate option. deck{} {} => ending".format(d.deck_id, d.status))
                             d.status = "ending"
                             ending_timer = Timer(d.fade_out_time - self.update_delay, self.deck_reset, args=[d])
                             ending_timer.start()
                             break
                     else:
-                        print("could not process 'immediate' option")
+                        print("could not process 'immediate' option for", details[:4])
                 self.queue_window.refresh()
                 if len(self.available_decks) >= 2 and self.initialize is False:
-                    print("queue is loading a track")
+                    print("queue is playing a track because no decks were playing")
                     self.load_from_queue(self.queue_list.pop(0), self.available_decks.pop(0))
             sleep_time = 1 + (0.2 - (process_time % 1))
             if sleep_time > 0.0:
@@ -251,7 +244,6 @@ class MainWindow(tk.Tk):
                                 ending_timer.start()
                         elif deck_object.song_type == "file":
                             if deck_object.remaining < deck_object.fade_out_time and deck_object.status != "ending":
-                                print("deck{} {} => ending".format(deck_object.deck_id,  deck_object.status))
                                 deck_object.status = "ending"
                                 ending_timer = Timer(deck_object.remaining - self.update_delay,
                                                      self.deck_reset, args=[deck_object])
@@ -286,7 +278,6 @@ class MainWindow(tk.Tk):
         deck_object.remaining = 9999
         deck_object.raw_chunk = bytes(deck_object.chunk_size)
         deck_object.reset_view()
-        print("deck{} reset".format(deck_object.deck_id))
 
     def run_app(self):
         print("app starting")
@@ -420,7 +411,7 @@ class MainWindow(tk.Tk):
             self.file_stream = []
             self.status = "loading"
 
-            headers = {"user-agent": "Lion Broadcaster", "Icy-MetaData": "1"}
+            headers = {"user-agent": "Lion Broadcaster 1.0", "Icy-MetaData": "1"}
             try:
                 resp = requests.get(path, headers=headers, stream=True)
             except requests.exceptions.ConnectionError:
@@ -437,9 +428,7 @@ class MainWindow(tk.Tk):
             metaint_header = "icy-metaint"
             if metaint_header in resp.headers.keys():
                 metaint_value = int(resp.headers[metaint_header])
-                print("found", metaint_header, ":", metaint_value)
             else:
-                print("no metaint_value found in headers")
                 metaint_value = 0
             self.duration = 0
             connected = True
@@ -483,7 +472,7 @@ class MainWindow(tk.Tk):
                 except StopIteration:
                     connected = False
                     if self.status == "playing":
-                        print("deck{} received stopiteration while playing. this is bad".format(self.deck_id))
+                        print("deck{} received a 'stop iteration' while playing. this is bad".format(self.deck_id))
                         self.song_file_path = ""
             ff_proc.kill()
             resp.close()
@@ -494,7 +483,6 @@ class MainWindow(tk.Tk):
             while self.status != "stopped":
                 self.file_stream.append(out.read(2048))
                 if len(self.file_stream) > self.buffer_size and self.status == "loading":
-                    print("deck{} {} => playing".format(self.deck_id, self.status))
                     self.status = "playing"
 
         def read_stderr(self, err):
@@ -503,7 +491,6 @@ class MainWindow(tk.Tk):
 
         def load_audio_file(self, path=None):
             if path is None:
-                print("you must pass a path to get_file_audio")
                 return False
             self.file_stream = []
             self.status = "loading"
@@ -511,7 +498,7 @@ class MainWindow(tk.Tk):
                 ff_proc = subprocess.Popen(["ffmpeg", "-hide_banner", "-i", path, "-f", "s16le", "-ar",
                                             str(self.sample_rate), "-ac", str(self.channels), "pipe:"],
                                            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-                timer = Timer(2, self.process_killer, args=[ff_proc])
+                timer = Timer(2, self.process_killer, args=[ff_proc, path])
                 timer.start()
                 done = False
                 while done is False:
@@ -532,15 +519,14 @@ class MainWindow(tk.Tk):
                 self.song_title = self.get_ffprobe_info(path, "title")
                 self.duration = float(self.get_ffprobe_info(path, "duration"))
                 if int(adj_time) < int(self.duration):
-                    print("calculated time ({}) differs from file ({})".format(int(adj_time), int(self.duration)))
+                    print("{} - length ({}) differs from metadata ({})".format(path, int(adj_time), int(self.duration)))
                     self.duration = adj_time
-                print("deck{} {} => playing".format(self.deck_id, self.status))
                 self.status = "playing"
                 return True
 
         @staticmethod
-        def process_killer(proc):
-            print("process killer was activated")
+        def process_killer(proc, path):
+            print(path, "took too long to load")
             proc.kill()
 
         def create_audio_out_stream(self):
@@ -553,7 +539,6 @@ class MainWindow(tk.Tk):
         @staticmethod
         def get_ffprobe_info(path=None, tag=None):
             if path is None or tag is None:
-                print("your need to pass the path and tag to look for with ffprobe")
                 return ""
             if tag == "duration":
                 sub_command_string = ["ffprobe", "-v", "error", "-show_entries", "format={}".format(tag),
@@ -593,7 +578,6 @@ class MainWindow(tk.Tk):
 
         def next_in_queue(self):
             if self.status == "playing":
-                print("deck{} {} => user ending".format(self.deck_id, self.status))
                 self.status = "ending"
                 thread = Timer(self.fade_out_time, self.root.deck_reset, args=[self])
                 thread.start()
