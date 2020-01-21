@@ -39,12 +39,26 @@ class MainWindow(tk.Tk):
         self.load_next_button.place(x=100, y=135, width=70, height=20)
         self.remove_next_button = tk.Button(self, font=self.font, text="remove next", command=self.remove_next_in_queue)
         self.remove_next_button.place(x=180, y=135, width=90, height=20)
+        self.encoder1_options = self.select_encoder(1)
+        self.encoder1_status_label = tk.Button(self, font=self.font, text="Stream1", command=self.encoder1_options)
+        self.encoder1_status_label.place(x=600, y=135, width=60, height=20)
+        self.encoder1_indicator = tk.Label(self, bg="#000000")
+        self.encoder1_indicator.place(x=665, y=135, width=20, height=20)
+        self.encoder2_options = self.select_encoder(2)
+        self.encoder2_status_label = tk.Button(self, font=self.font, text="Stream2", command=self.encoder2_options)
+        self.encoder2_status_label.place(x=690, y=135, width=60, height=20)
+        self.encoder2_indicator = tk.Label(self, bg="#000000")
+        self.encoder2_indicator.place(x=755, y=135, width=20, height=20)
+        self.encoder_indicators = {"enc1": self.encoder1_indicator, "enc2": self.encoder2_indicator}
         self.queue_window = self.QueueWindow(self)
         self.queue_window.queue_frame.place(x=10, y=160)
         self.log_window = self.LogWindow(self)
         self.log_window.log_frame.place(x=10, y=390)
+        self.encoder_options_window = self.EncoderWindow(self)
+        self.encoder_options_window.encoder_frame.place(anchor="center", relx=0.5, rely=0.5)
         self.queue_list = []
         self.valid_exts = [".mp3", ".wav", ".ogg", ".wma", ".flac"]
+        self.ignored_exts = [".jpg", ".JPG", ".txt", ".url", ".ini"]
         self.played_dict = {}
         self.no_repeat_time = no_repeat_time
         self.sched_name = None
@@ -87,6 +101,12 @@ class MainWindow(tk.Tk):
                 except KeyError:
                     print(item, "not found in played_dict")
         self.queue_window.refresh()
+
+    def select_encoder(self, enc):
+        def open_encoder_options():
+            if not self.encoder_options_window.is_visible:
+                self.encoder_options_window.open_options(enc)
+        return open_encoder_options
 
     def load_from_queue(self, path, deck_object=None):
         if deck_object is None:
@@ -209,6 +229,8 @@ class MainWindow(tk.Tk):
                 elif time.time() > self.played_dict[path][file] + (self.no_repeat_time * 60):
                     del self.played_dict[path][file]
                     choices.append(file)
+            elif file[index:] not in self.ignored_exts:
+                print(file, "does not have a recognised extension")
         if len(choices) > 0:
             choice = random.choice(choices)
             self.played_dict[path][choice] = time.time()
@@ -279,13 +301,33 @@ class MainWindow(tk.Tk):
         deck_object.raw_chunk = bytes(deck_object.chunk_size)
         deck_object.reset_view()
 
+    def process_encoders(self):
+        encoder_threads = []
+        while self.deckA.running or self.deckB.running:
+            time.sleep(5)
+            for key in self.encoder_options_window.encoder_dict:
+                if self.encoder_options_window.encoder_dict[key]["enabled"] == 1:
+                    if key in encoder_threads:
+                        self.encoder_indicators[key].configure(bg="#00FF00")
+                    else:
+                        self.encoder_indicators[key].configure(bg="#FF0000")
+                        encoder_threads.append(key)
+                else:
+                    if key in encoder_threads:
+                        encoder_threads.remove(key)
+                        self.encoder_indicators[key].configure(bg="#000000")
+
     def run_app(self):
         print("app starting")
         thread = Thread(name="schedule_thread", target=self.process_schedule, daemon=True)
         thread.start()
-        time.sleep(1)
+        print("schedule thread started")
         thread = Thread(name="deck_manage_thread", target=self.process_decks, daemon=True)
         thread.start()
+        print("deck management thread started")
+        thread = Thread(name="encoder_manage_thread", target=self.process_encoders, daemon=True)
+        thread.start()
+        print("encoder management thread started")
         try:
             self.mainloop()
         except (KeyboardInterrupt, SystemExit):
@@ -673,6 +715,86 @@ class MainWindow(tk.Tk):
                 new_image[v, :, 1] = ((255 // (v + 1)) * -1) + 255
             vol_image = Image.fromarray(new_image, "RGB").resize((10, 70))
             return ImageTk.PhotoImage(vol_image)
+
+    class EncoderWindow:
+        def __init__(self, root):
+            self.font = ("helvetica", 10)
+            self.root = root
+            try:
+                self.encoder_dict = {}
+                with open("encoders.cfg") as file:
+                    entries = file.readlines()
+                    for i, entry in enumerate(entries):
+                        entry = entry.strip("\n")
+                        result = entry.split(sep="::")
+                        enc_id = "enc"+str(i+1)
+                        self.encoder_dict[enc_id] = {"enabled": int(result[0]), "type": result[1],
+                                                     "url": result[2], "port": result[3], "mount": result[4]}
+            except (FileNotFoundError, IOError):
+                self.encoder_dict = {"enc1": {"enabled": 1, "type": "shoutcast",
+                                              "url": "http://127.0.0.1", "port": "8000", "mount": "/stream"},
+                                     "enc2": {"enabled": 0, "type": "icecast",
+                                              "url": "http://127.0.0.1", "port": "9000", "mount": "/stream"}
+                                     }
+            self.selected_encoder = "enc1"
+            self.encoder_enable_var = tk.IntVar()
+            self.encoder_type_var = tk.StringVar()
+            self.encoder_url_var = tk.StringVar()
+            self.encoder_port_var = tk.StringVar()
+            self.encoder_mount_var = tk.StringVar()
+            self.encoder_frame = tk.Frame(self.root, width=300, height=300, bd=10, relief="ridge")
+            self.encoder_frame.lower()
+            self.is_visible = False
+            self.encoder_enable_label = tk.Label(self.encoder_frame, font=self.font, text="Enabled")
+            self.encoder_enable_label.place(relx=0.05, y=20)
+            self.encoder_enabled = tk.Checkbutton(self.encoder_frame, font=self.font, variable=self.encoder_enable_var)
+            self.encoder_enabled.place(relx=0.37, y=20)
+            self.encoder_type_label = tk.Label(self.encoder_frame, font=self.font, text="Server Type")
+            self.encoder_type_label.place(relx=0.05, y=60)
+            self.encoder_type_input = tk.Entry(self.encoder_frame, font=self.font, textvariable=self.encoder_type_var)
+            self.encoder_type_input.place(relx=0.40, y=60, width=150)
+            self.encoder_url_label = tk.Label(self.encoder_frame, font=self.font, text="Server URL")
+            self.encoder_url_label.place(relx=0.05, y=100)
+            self.encoder_url_input = tk.Entry(self.encoder_frame, font=self.font, textvariable=self.encoder_url_var)
+            self.encoder_url_input.place(relx=0.40, y=100, width=150)
+            self.encoder_port_label = tk.Label(self.encoder_frame, font=self.font, text="Server Port")
+            self.encoder_port_label.place(relx=0.05, y=140)
+            self.encoder_port_input = tk.Entry(self.encoder_frame, font=self.font, textvariable=self.encoder_port_var)
+            self.encoder_port_input.place(relx=0.40, y=140, width=50)
+            self.encoder_mount_label = tk.Label(self.encoder_frame, font=self.font, text="Mount Point")
+            self.encoder_mount_label.place(relx=0.05, y=180)
+            self.encoder_mount_input = tk.Entry(self.encoder_frame, font=self.font, textvariable=self.encoder_mount_var)
+            self.encoder_mount_input.place(relx=0.40, y=180, width=150)
+            self.encoder_button = tk.Button(self.encoder_frame, font=self.font, text="OK", command=self.close_options)
+            self.encoder_button.place(anchor="center", relx=0.5, y=250)
+
+        def open_options(self, enc):
+            self.encoder_frame.lift()
+            self.is_visible = True
+            enc_id = "enc1" if enc == 1 else "enc2"
+            self.selected_encoder = enc_id
+            self.encoder_enable_var.set(self.encoder_dict[enc_id]["enabled"])
+            self.encoder_type_var.set(self.encoder_dict[enc_id]["type"])
+            self.encoder_url_var.set(self.encoder_dict[enc_id]["url"])
+            self.encoder_port_var.set(self.encoder_dict[enc_id]["port"])
+            self.encoder_mount_var.set(self.encoder_dict[enc_id]["mount"])
+
+        def close_options(self):
+            self.encoder_frame.lower()
+            self.is_visible = False
+            self.encoder_dict[self.selected_encoder]["enabled"] = self.encoder_enable_var.get()
+            self.encoder_dict[self.selected_encoder]["type"] = self.encoder_type_var.get()
+            self.encoder_dict[self.selected_encoder]["url"] = self.encoder_url_var.get()
+            self.encoder_dict[self.selected_encoder]["port"] = self.encoder_port_var.get()
+            self.encoder_dict[self.selected_encoder]["mount"] = self.encoder_mount_var.get()
+            self.save_options()
+
+        def save_options(self):
+            with open("encoders.cfg", "w") as file:
+                for key in self.encoder_dict:
+                    entry = self.encoder_dict[key]
+                    file.write("{}::{}::{}::{}::{}\n".format(entry["enabled"], entry["type"], entry["url"],
+                                                             entry["port"], entry["mount"]))
 
     class QueueWindow:
         def __init__(self, root):
