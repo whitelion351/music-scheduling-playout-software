@@ -342,7 +342,6 @@ class MainWindow(tk.Tk):
                 chunk1 = np.frombuffer(self.encoder_buffer["A"].pop(0), dtype=np.int16)
                 chunk2 = np.frombuffer(self.encoder_buffer["B"].pop(0), dtype=np.int16)
                 if self.encoder_threads == {}:
-                    print("enc feed sleeping...")
                     time.sleep(1)
                     break
                 if len(chunk1) < self.chunk_size // 2:
@@ -354,7 +353,8 @@ class MainWindow(tk.Tk):
                 result = np.add(chunk1, chunk2)
                 for enc in self.encoder_threads:
                     enc_proc = self.encoder_threads[enc]
-                    enc_proc.stdin.write(result.tobytes())
+                    if enc_proc.poll() is None:
+                        enc_proc.stdin.write(result.tobytes())
 
     def run_app(self):
         print("app starting")
@@ -778,10 +778,10 @@ class MainWindow(tk.Tk):
                         self.encoder_dict[enc_id] = {"enabled": int(result[0]), "user:pass": result[1],
                                                      "url": result[2], "port": result[3], "mount": result[4]}
             except (FileNotFoundError, IOError):
-                self.encoder_dict = {"enc1": {"enabled": 1, "user:pass": "shoutcast",
-                                              "url": "http://127.0.0.1", "port": "8000", "mount": "/stream"},
-                                     "enc2": {"enabled": 0, "user:pass": "icecast",
-                                              "url": "http://127.0.0.1", "port": "9000", "mount": "/stream"}
+                self.encoder_dict = {"enc1": {"enabled": 0, "user:pass": "sourceuser:sourcepass",
+                                              "url": "127.0.0.1", "port": "8000", "mount": "stream"},
+                                     "enc2": {"enabled": 0, "user:pass": "sourceuser:sourcepass",
+                                              "url": "127.0.0.1", "port": "9000", "mount": "stream"}
                                      }
             self.selected_encoder = "enc1"
             self.encoder_enable_var = tk.IntVar()
