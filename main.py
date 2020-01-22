@@ -22,7 +22,7 @@ class MainWindow(tk.Tk):
         self.all_decks = []
         self.available_decks = []
         self.master_volume = 1.0
-        self.chunk_size = 2048
+        self.chunk_size = 4096
         self.deckA = self.PlayerDeck(self, "A")
         self.deckB = self.PlayerDeck(self, "B")
         self.deckA.deck_frame.place(x=10, y=10)
@@ -345,16 +345,20 @@ class MainWindow(tk.Tk):
                     time.sleep(1)
                     break
                 if len(chunk1) < self.chunk_size // 2:
-                    print("adjusting chunk1 from", len(chunk1), "to", self.chunk_size // 2)
                     chunk1 = np.append(chunk1, [0 for _ in range((self.chunk_size // 2) - len(chunk1))])
                 if len(chunk2) < self.chunk_size / 2:
-                    print("adjusting chunk2 from", len(chunk2), "to", self.chunk_size // 2)
                     chunk2 = np.append(chunk2, [0 for _ in range((self.chunk_size // 2) - len(chunk2))])
-                result = np.add(chunk1, chunk2)
+                result = np.add(chunk1, chunk2, dtype=np.int32)
+                result = np.array(np.clip(result, -32768, 32767)).astype(np.int16)
                 for enc in self.encoder_threads:
                     enc_proc = self.encoder_threads[enc]
                     if enc_proc.poll() is None:
-                        enc_proc.stdin.write(result.tobytes())
+                        try:
+                            enc_proc.stdin.write(result.tobytes())
+                        except BrokenPipeError:
+                            print("waiting for", enc)
+                            time.sleep(1)
+            time.sleep(0.005)
 
     def run_app(self):
         print("app starting")
@@ -388,7 +392,7 @@ class MainWindow(tk.Tk):
             self.width = 385
             self.height = 120
             self.font = ("helvetica", 10)
-            self.buffer_size = 1024
+            self.stream_input_buffer_size = 1024
             self.song_artist = ""
             self.song_title = ""
             self.song_file_path = ""
@@ -527,14 +531,14 @@ class MainWindow(tk.Tk):
             stream_output = bytes()
             while connected and self.status != "stopped":
                 try:
-                    if len(self.file_stream) > self.buffer_size:
-                        while len(self.file_stream) > self.buffer_size:
+                    if len(self.file_stream) > self.stream_input_buffer_size:
+                        while len(self.file_stream) > self.stream_input_buffer_size:
                             time.sleep(0.001)
                             if self.status == "stopped":
                                 raise StopIteration
                     for _ in range(metaint_value if metaint_value > 0 else 1):
                         stream_output += next(data)
-                        if len(stream_output) == 1024:
+                        if len(stream_output) == self.stream_input_buffer_size:
                             ff_proc.stdin.write(stream_output)
                             stream_output = bytes()
                     if metaint_value > 0:
@@ -562,8 +566,8 @@ class MainWindow(tk.Tk):
 
         def read_stdout(self, out):
             while self.status != "stopped":
-                self.file_stream.append(out.read(2048))
-                if len(self.file_stream) > self.buffer_size and self.status == "loading":
+                self.file_stream.append(out.read(self.chunk_size))
+                if len(self.file_stream) > self.stream_input_buffer_size and self.status == "loading":
                     self.status = "playing"
 
         def read_stderr(self, err):
@@ -583,7 +587,7 @@ class MainWindow(tk.Tk):
                 timer.start()
                 done = False
                 while done is False:
-                    buf = ff_proc.stdout.read(2048)
+                    buf = ff_proc.stdout.read(self.chunk_size)
                     if len(buf) == 0:
                         done = True
                     else:
