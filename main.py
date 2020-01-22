@@ -14,7 +14,7 @@ from PIL import ImageTk, Image
 class MainWindow(tk.Tk):
     def __init__(self, no_repeat_time=180):
         super(MainWindow, self).__init__()
-        self.title("Lion Music Scheduler")
+        self.title("Lion Music Scheduler 2.0")
         self.update_delay = 0.1
         self.canvas = tk.Canvas(self, width=799, height=549, bg="#555555")
         self.canvas.pack()
@@ -22,6 +22,7 @@ class MainWindow(tk.Tk):
         self.all_decks = []
         self.available_decks = []
         self.master_volume = 1.0
+        self.chunk_size = 2048
         self.deckA = self.PlayerDeck(self, "A")
         self.deckB = self.PlayerDeck(self, "B")
         self.deckA.deck_frame.place(x=10, y=10)
@@ -50,6 +51,8 @@ class MainWindow(tk.Tk):
         self.encoder2_indicator = tk.Label(self, bg="#000000")
         self.encoder2_indicator.place(x=755, y=135, width=20, height=20)
         self.encoder_indicators = {"enc1": self.encoder1_indicator, "enc2": self.encoder2_indicator}
+        self.encoder_buffer = {"A": [], "B": []}
+        self.encoder_threads = {}
         self.queue_window = self.QueueWindow(self)
         self.queue_window.queue_frame.place(x=10, y=160)
         self.log_window = self.LogWindow(self)
@@ -130,6 +133,7 @@ class MainWindow(tk.Tk):
             process_time = time.time()
             total_added = 0
             do_immediate = False
+            current_group = []
             with open("schedule.txt", "r") as sched:
                 _ = sched.readlines()
                 eof = sched.tell()
@@ -152,6 +156,7 @@ class MainWindow(tk.Tk):
                                 new_items = []
                                 if entry_name != self.sched_name:
                                     self.log_window.log_window_update("new schedule group: {}".format(details[:4]))
+                                    current_group = details[:4]
                                     if entry_name != "any" and entry_name != "none":
                                         self.sched_name = entry_name
                                     if "clear" in entry_options:
@@ -187,10 +192,10 @@ class MainWindow(tk.Tk):
                             ending_timer.start()
                             break
                     else:
-                        print("could not process 'immediate' option for", details[:4])
+                        print("could not process 'immediate' option for", current_group)
                 self.queue_window.refresh()
                 if len(self.available_decks) >= 2 and self.initialize is False:
-                    print("queue is playing a track because no decks were playing")
+                    print("queue used auto recover because no decks were playing")
                     self.load_from_queue(self.queue_list.pop(0), self.available_decks.pop(0))
             sleep_time = 1 + (0.2 - (process_time % 1))
             if sleep_time > 0.0:
@@ -302,20 +307,54 @@ class MainWindow(tk.Tk):
         deck_object.reset_view()
 
     def process_encoders(self):
-        encoder_threads = []
+        feed_thread = Thread(name="encoder_feed_thread", target=self.feeder_thread, daemon=True)
+        feed_thread.start()
         while self.deckA.running or self.deckB.running:
             time.sleep(5)
             for key in self.encoder_options_window.encoder_dict:
                 if self.encoder_options_window.encoder_dict[key]["enabled"] == 1:
-                    if key in encoder_threads:
-                        self.encoder_indicators[key].configure(bg="#00FF00")
+                    if key in self.encoder_threads:
+                        if self.encoder_threads[key].poll() is None:
+                            self.encoder_indicators[key].configure(bg="#00FF00")
+                        else:
+                            self.encoder_threads[key].kill()
+                            del self.encoder_threads[key]
                     else:
                         self.encoder_indicators[key].configure(bg="#FF0000")
-                        encoder_threads.append(key)
+                        user_pass = self.encoder_options_window.encoder_dict[key]["user:pass"]
+                        url = self.encoder_options_window.encoder_dict[key]["url"]
+                        port = self.encoder_options_window.encoder_dict[key]["port"]
+                        mount = self.encoder_options_window.encoder_dict[key]["mount"]
+                        end_point = "icecast://{}@{}:{}/{}".format(user_pass, url, port, mount)
+                        enc_proc = subprocess.Popen(["ffmpeg", "-hide_banner", "-f", "s16le", "-ac", "2", "-i", "pipe:",
+                                                     "-f", "mp3", "-ar", "44100", "-ab", "64k", end_point],
+                                                    stdin=subprocess.PIPE, stderr=subprocess.DEVNULL)
+                        self.encoder_threads[key] = enc_proc
                 else:
-                    if key in encoder_threads:
-                        encoder_threads.remove(key)
+                    if key in self.encoder_threads:
+                        self.encoder_threads[key].kill()
+                        del self.encoder_threads[key]
                         self.encoder_indicators[key].configure(bg="#000000")
+
+    def feeder_thread(self):
+        while self.deckA.running or self.deckB.running:
+            while len(self.encoder_buffer["A"]) > 0 and len(self.encoder_buffer["B"]) > 0:
+                chunk1 = np.frombuffer(self.encoder_buffer["A"].pop(0), dtype=np.int16)
+                chunk2 = np.frombuffer(self.encoder_buffer["B"].pop(0), dtype=np.int16)
+                if self.encoder_threads == {}:
+                    print("enc feed sleeping...")
+                    time.sleep(1)
+                    break
+                if len(chunk1) < self.chunk_size // 2:
+                    print("adjusting chunk1 from", len(chunk1), "to", self.chunk_size // 2)
+                    chunk1 = np.append(chunk1, [0 for _ in range((self.chunk_size // 2) - len(chunk1))])
+                if len(chunk2) < self.chunk_size / 2:
+                    print("adjusting chunk2 from", len(chunk2), "to", self.chunk_size // 2)
+                    chunk2 = np.append(chunk2, [0 for _ in range((self.chunk_size // 2) - len(chunk2))])
+                result = np.add(chunk1, chunk2)
+                for enc in self.encoder_threads:
+                    enc_proc = self.encoder_threads[enc]
+                    enc_proc.stdin.write(result.tobytes())
 
     def run_app(self):
         print("app starting")
@@ -366,7 +405,7 @@ class MainWindow(tk.Tk):
             self.deck_id = deck_id
 
             # pyaudio and audioread creation for reading files only
-            self.chunk_size = 2048
+            self.chunk_size = root.chunk_size
             self.port_audio = pyaudio.PyAudio()
             self.audio_out = None
             self.create_audio_out_stream()
@@ -453,7 +492,7 @@ class MainWindow(tk.Tk):
             self.file_stream = []
             self.status = "loading"
 
-            headers = {"user-agent": "Lion Broadcaster 1.0", "Icy-MetaData": "1"}
+            headers = {"user-agent": "Lion Broadcaster 2.0", "Icy-MetaData": "1"}
             try:
                 resp = requests.get(path, headers=headers, stream=True)
             except requests.exceptions.ConnectionError:
@@ -613,10 +652,18 @@ class MainWindow(tk.Tk):
                         # write to pyaudio
                         self.raw_chunk = processed_chunk
                         self.audio_out.write(processed_chunk)
+                        try:
+                            self.root.encoder_buffer[self.deck_id].append(processed_chunk)
+                        except AttributeError:
+                            print("encoder buffer not found when writing data")
                 else:
                     # write silence if not playing to avoid buffer under run
                     self.raw_chunk = bytes(self.chunk_size)
                     self.audio_out.write(self.raw_chunk)
+                    try:
+                        self.root.encoder_buffer[self.deck_id].append(self.raw_chunk)
+                    except AttributeError:
+                        pass
 
         def next_in_queue(self):
             if self.status == "playing":
@@ -728,12 +775,12 @@ class MainWindow(tk.Tk):
                         entry = entry.strip("\n")
                         result = entry.split(sep="::")
                         enc_id = "enc"+str(i+1)
-                        self.encoder_dict[enc_id] = {"enabled": int(result[0]), "type": result[1],
+                        self.encoder_dict[enc_id] = {"enabled": int(result[0]), "user:pass": result[1],
                                                      "url": result[2], "port": result[3], "mount": result[4]}
             except (FileNotFoundError, IOError):
-                self.encoder_dict = {"enc1": {"enabled": 1, "type": "shoutcast",
+                self.encoder_dict = {"enc1": {"enabled": 1, "user:pass": "shoutcast",
                                               "url": "http://127.0.0.1", "port": "8000", "mount": "/stream"},
-                                     "enc2": {"enabled": 0, "type": "icecast",
+                                     "enc2": {"enabled": 0, "user:pass": "icecast",
                                               "url": "http://127.0.0.1", "port": "9000", "mount": "/stream"}
                                      }
             self.selected_encoder = "enc1"
@@ -749,7 +796,7 @@ class MainWindow(tk.Tk):
             self.encoder_enable_label.place(relx=0.05, y=20)
             self.encoder_enabled = tk.Checkbutton(self.encoder_frame, font=self.font, variable=self.encoder_enable_var)
             self.encoder_enabled.place(relx=0.37, y=20)
-            self.encoder_type_label = tk.Label(self.encoder_frame, font=self.font, text="Server Type")
+            self.encoder_type_label = tk.Label(self.encoder_frame, font=self.font, text="User:Pass")
             self.encoder_type_label.place(relx=0.05, y=60)
             self.encoder_type_input = tk.Entry(self.encoder_frame, font=self.font, textvariable=self.encoder_type_var)
             self.encoder_type_input.place(relx=0.40, y=60, width=150)
@@ -774,7 +821,7 @@ class MainWindow(tk.Tk):
             enc_id = "enc1" if enc == 1 else "enc2"
             self.selected_encoder = enc_id
             self.encoder_enable_var.set(self.encoder_dict[enc_id]["enabled"])
-            self.encoder_type_var.set(self.encoder_dict[enc_id]["type"])
+            self.encoder_type_var.set(self.encoder_dict[enc_id]["user:pass"])
             self.encoder_url_var.set(self.encoder_dict[enc_id]["url"])
             self.encoder_port_var.set(self.encoder_dict[enc_id]["port"])
             self.encoder_mount_var.set(self.encoder_dict[enc_id]["mount"])
@@ -783,7 +830,7 @@ class MainWindow(tk.Tk):
             self.encoder_frame.lower()
             self.is_visible = False
             self.encoder_dict[self.selected_encoder]["enabled"] = self.encoder_enable_var.get()
-            self.encoder_dict[self.selected_encoder]["type"] = self.encoder_type_var.get()
+            self.encoder_dict[self.selected_encoder]["user:pass"] = self.encoder_type_var.get()
             self.encoder_dict[self.selected_encoder]["url"] = self.encoder_url_var.get()
             self.encoder_dict[self.selected_encoder]["port"] = self.encoder_port_var.get()
             self.encoder_dict[self.selected_encoder]["mount"] = self.encoder_mount_var.get()
@@ -793,7 +840,7 @@ class MainWindow(tk.Tk):
             with open("encoders.cfg", "w") as file:
                 for key in self.encoder_dict:
                     entry = self.encoder_dict[key]
-                    file.write("{}::{}::{}::{}::{}\n".format(entry["enabled"], entry["type"], entry["url"],
+                    file.write("{}::{}::{}::{}::{}\n".format(entry["enabled"], entry["user:pass"], entry["url"],
                                                              entry["port"], entry["mount"]))
 
     class QueueWindow:
