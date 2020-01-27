@@ -286,7 +286,6 @@ class MainWindow(tk.Tk):
                                     self.load_from_queue(self.queue_list.pop(0), self.available_decks.pop(0))
                                 break
                     if deck_object.status == "stopped" and deck_object not in self.available_decks:
-                        print("deck{} was stopped but not available. fixing...".format(deck_object.deck_id))
                         self.available_decks.append(deck_object)
                 sleep_time = 1 + (0.5 - (process_time % 1))
                 if sleep_time > 0.0:
@@ -309,6 +308,8 @@ class MainWindow(tk.Tk):
     def process_encoders(self):
         feed_thread = Thread(name="encoder_feed_thread", target=self.feeder_thread, daemon=True)
         feed_thread.start()
+        last_title_a = ""
+        last_title_b = ""
         while self.deckA.running or self.deckB.running:
             time.sleep(5)
             for key in self.encoder_options_window.encoder_dict:
@@ -316,11 +317,21 @@ class MainWindow(tk.Tk):
                     if key in self.encoder_threads:
                         if self.encoder_threads[key].poll() is None:
                             self.encoder_indicators[key].configure(bg="#00FF00")
+                            if self.deckA.status == "playing" and self.deckA.song_title != last_title_a:
+                                last_title_a = self.deckA.song_title
+                                info = {"artist": self.deckA.song_artist, "title": self.deckA.song_title}
+                                self.send_metadata(key, info)
+                            elif self.deckB.status == "playing" and self.deckB.song_title != last_title_b:
+                                last_title_b = self.deckB.song_title
+                                info = {"artist": self.deckB.song_artist, "title": self.deckB.song_title}
+                                self.send_metadata(key, info)
                         else:
+                            print("Stream{} lost connection".format(key[-1]))
                             self.encoder_threads[key].kill()
                             del self.encoder_threads[key]
+                            self.encoder_indicators[key].configure(bg="#FF0000")
                     else:
-                        self.encoder_indicators[key].configure(bg="#FF0000")
+                        self.encoder_indicators[key].configure(bg="#FFFF00")
                         user_pass = self.encoder_options_window.encoder_dict[key]["user:pass"]
                         url = self.encoder_options_window.encoder_dict[key]["url"]
                         port = self.encoder_options_window.encoder_dict[key]["port"]
@@ -332,13 +343,23 @@ class MainWindow(tk.Tk):
                         enc_proc = subprocess.Popen(["ffmpeg", "-hide_banner", "-f", "s16le", "-ac", "2", "-i", "pipe:",
                                                      "-f", "mp3", "-ar", "44100", "-ab", brate, "-ac", chls, end_point],
                                                     stdin=subprocess.PIPE, stderr=subprocess.DEVNULL)
-                        enc_proc.stdin.write(bytes(self.chunk_size * 25))
+                        enc_proc.stdin.write(bytes(self.chunk_size * 100))
                         self.encoder_threads[key] = enc_proc
                 else:
                     if key in self.encoder_threads:
                         self.encoder_threads[key].kill()
                         del self.encoder_threads[key]
-                        self.encoder_indicators[key].configure(bg="#000000")
+                    self.encoder_indicators[key].configure(bg="#000000")
+
+    def send_metadata(self, key, info):
+        data = info["artist"] + " - " + info["title"]
+        data = data.replace("&", "%26")
+        this_dict = self.encoder_options_window.encoder_dict[key]
+        url1 = "http://{}@{}:{}".format(this_dict["user:pass"], this_dict["url"], this_dict["port"])
+        url2 = "/admin/metadata?mount=/{}&mode=updinfo&song=".format(this_dict["mount"])
+        url2 += data
+        url = url1 + url2
+        requests.get(url)
 
     def feeder_thread(self):
         while self.deckA.running or self.deckB.running:
