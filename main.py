@@ -319,7 +319,11 @@ class MainWindow(tk.Tk):
                             self.encoder_indicators[key].configure(bg="#00FF00")
                             if self.deckA.status == "playing" and self.deckA.song_title != last_title_a:
                                 last_title_a = self.deckA.song_title
-                                info = {"artist": self.deckA.song_artist, "title": self.deckA.song_title}
+                                if self.deckA.song_type == "file":
+                                    info = {"artist": self.deckA.song_artist, "title": self.deckA.song_title}
+                                else:
+                                    info = self.deckA.song_title.split(sep=" - ")
+                                    info = {"artist": info[0], "title": info[-1]}
                                 self.send_metadata(key, info)
                             elif self.deckB.status == "playing" and self.deckB.song_title != last_title_b:
                                 last_title_b = self.deckB.song_title
@@ -390,15 +394,18 @@ class MainWindow(tk.Tk):
                 result = np.add(chunk1, chunk2, dtype=np.int32)
                 result = np.array(np.clip(result, -32768, 32767)).astype(np.int16)
                 result = result.tobytes()
-                for enc in self.encoder_threads:
-                    enc_proc = self.encoder_threads[enc]
-                    if enc_proc.poll() is None:
-                        try:
-                            enc_proc.stdin.write(result)
-                        except BrokenPipeError:
-                            print("waiting for", enc)
-                            time.sleep(1)
-            time.sleep(0.5)
+                try:
+                    for enc in self.encoder_threads:
+                        enc_proc = self.encoder_threads[enc]
+                        if enc_proc.poll() is None:
+                            try:
+                                enc_proc.stdin.write(result)
+                            except BrokenPipeError:
+                                print("cannot write to", enc)
+                                time.sleep(1)
+                except RuntimeError as e:
+                    print("encoder feeder thread had a runtime error", e)
+            time.sleep(0.2)
 
     def run_app(self):
         print("app starting")
@@ -432,7 +439,9 @@ class MainWindow(tk.Tk):
             self.width = 385
             self.height = 120
             self.font = ("helvetica", 10)
-            self.stream_input_buffer_size = 1024
+            self.stream_input_chunk_size = 1024
+            self.stream_input_buffer_min_size = 512
+            self.stream_input_buffer_max_size = 1024
             self.song_artist = ""
             self.song_title = ""
             self.song_file_path = ""
@@ -571,13 +580,13 @@ class MainWindow(tk.Tk):
             stream_output = bytes()
             while connected and self.status != "stopped":
                 try:
-                    while len(self.file_stream) > self.stream_input_buffer_size:
+                    while len(self.file_stream) > self.stream_input_buffer_max_size:
                         time.sleep(0.005)
                         if self.status == "stopped":
                             raise StopIteration
                     for _ in range(metaint_value if metaint_value > 0 else 1):
                         stream_output += next(data)
-                        if len(stream_output) == self.stream_input_buffer_size:
+                        if len(stream_output) == self.stream_input_chunk_size:
                             ff_proc.stdin.write(stream_output)
                             stream_output = bytes()
                     if metaint_value > 0:
@@ -606,7 +615,7 @@ class MainWindow(tk.Tk):
         def read_stdout(self, out):
             while self.status != "stopped":
                 self.file_stream.append(out.read(self.chunk_size))
-                if len(self.file_stream) > self.stream_input_buffer_size and self.status == "loading":
+                if len(self.file_stream) > self.stream_input_buffer_min_size and self.status == "loading":
                     self.status = "playing"
 
         def read_stderr(self, err):
@@ -701,6 +710,11 @@ class MainWindow(tk.Tk):
                         self.audio_out.write(processed_chunk)
                         try:
                             if len(self.root.encoder_threads) != 0:
+                                if len(self.root.encoder_buffer[self.deck_id]) > 10000:
+                                    print("encoder buffer was waaay too big. possibly due to crash of encoder feeder"
+                                          "thread. clearing the buffer")
+                                    self.root.encoder_buffer["A"] = []
+                                    self.root.encoder_buffer["B"] = []
                                 self.root.encoder_buffer[self.deck_id].append(processed_chunk)
                         except AttributeError:
                             print("encoder buffer {} not found when writing data".format(self.deck_id))
